@@ -1,5 +1,6 @@
-import { memo, useMemo } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { useAtomValue } from 'jotai';
+import TerminalPanel from '~/components/Terminal/TerminalPanel';
 import { useRecoilValue } from 'recoil';
 import { useForm } from 'react-hook-form';
 import { Spinner } from '@librechat/client';
@@ -45,6 +46,7 @@ function LoadingSpinner() {
 }
 
 function ChatView({ index = 0, project }: { index?: number; project?: TChatProject }) {
+  const [isTerminalVisible, setIsTerminalVisible] = useState(false);
   const { conversationId } = useParams();
   const localize = useLocalize();
   const rootSubmission = useRecoilValue(store.submissionByIndex(index));
@@ -227,6 +229,18 @@ function ChatView({ index = 0, project }: { index?: number; project?: TChatProje
                         </div>
                       </div>
                       {isLandingPage && <Footer />}
+                      <div className="absolute top-4 right-16 z-50">
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            setIsTerminalVisible((v) => !v);
+                          }}
+                          className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-white rounded shadow text-sm transition-colors"
+                        >
+                          {isTerminalVisible ? 'Hide Agent Terminal' : 'Show Agent Terminal'}
+                        </button>
+                      </div>
+                      <TerminalPanel isVisible={isTerminalVisible} />
                     </>
                   </TraceSurface>
                 </Presentation>
