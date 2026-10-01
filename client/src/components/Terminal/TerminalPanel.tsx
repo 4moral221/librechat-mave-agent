@@ -69,12 +69,15 @@ export default function TerminalPanel({ isVisible }: { isVisible: boolean }) {
     }
   }, [isVisible]);
 
-  if (!isVisible) return null;
-
   return (
     <div 
       className="flex flex-col w-full bg-[#1e1e1e] border-t border-gray-700 shadow-2xl rounded-t-xl overflow-hidden z-20"
-      style={{ minHeight: '300px', flexBasis: '300px', flexGrow: 0 }}
+      style={{ 
+        minHeight: '300px', 
+        flexBasis: '300px', 
+        flexGrow: 0,
+        display: isVisible ? 'flex' : 'none'
+      }}
     >
       {/* macOS Style Title Bar */}
       <div className="flex items-center justify-between px-4 py-2 bg-[#2d2d2d] border-b border-[#111] relative">
