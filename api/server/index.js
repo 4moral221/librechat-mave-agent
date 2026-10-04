@@ -85,9 +85,9 @@ const optionalJwtAuth = require('./middleware/optionalJwtAuth');
 // missing/broken, the terminal is disabled instead of the API crashing.
 let setupTerminalSocket = null;
 try {
-  setupTerminalSocket = require('./server/terminalSocket');
+  setupTerminalSocket = require('~/server/terminalSocket');
 } catch (err) {
-  logger.warn('[terminal-socket] module unavailable - Mave terminal disabled:', err.message);
+  logger.warn('[terminal-socket] module unavailable - Mave terminal disabled:', err.message, err.code);
 }
 const initializeMCPs = require('./services/initializeMCPs');
 const { configureSubagentTaskRouting } = require('./services/Endpoints/agents/subagentThreadStore');
