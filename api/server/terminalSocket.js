@@ -9,7 +9,7 @@ let pty = null;
 try {
   pty = require('node-pty');
 } catch (err) {
-  logger.warn('[terminal-socket] node-pty unavailable — Mave terminal disabled:', err.message);
+  logger.warn('[terminal-socket] node-pty unavailable - Mave terminal disabled:', err.message);
 }
 
 // Only a minimal, secret-free environment is passed into the PTY process.
@@ -61,32 +61,51 @@ function setupTerminalSocket(server) {
     },
   });
 
-  // Auth gate: every connection must present a valid LibreChat JWT (signed with JWT_SECRET).
-  // Unauthenticated upgrades are rejected before any PTY is spawned.
+  // Auth gate: every connection must present a valid LibreChat JWT signed with
+  // JWT_SECRET. Rejected before any PTY is spawned.
   io.use((socket, next) => {
     const token = extractToken(socket);
-    if (!token || !process.env.JWT_SECRET) {
+    if (!token) {
+      logger.warn('[terminal-socket] auth rejected: no token presented', { socketId: socket.id });
+      return next(new Error('unauthorized'));
+    }
+    if (!process.env.JWT_SECRET) {
+      logger.warn('[terminal-socket] auth rejected: JWT_SECRET is not set on the server');
       return next(new Error('unauthorized'));
     }
     try {
       jwt.verify(token, process.env.JWT_SECRET);
-      return next();
     } catch (err) {
+      // err.message is the verification reason (e.g. jwt expired), never the token.
+      logger.warn('[terminal-socket] auth rejected: verification failed', {
+        socketId: socket.id,
+        reason: err.message,
+      });
       return next(new Error('unauthorized'));
     }
+    return next();
   });
 
   io.on('connection', (socket) => {
-    logger.info('Client connected to Mave Terminal Socket');
+    logger.info('[terminal-socket] client connected', { socketId: socket.id });
 
     const shell = os.platform() === 'win32' ? 'powershell.exe' : 'bash';
-    const ptyProcess = pty.spawn(shell, [], {
-      name: 'xterm-color',
-      cols: 80,
-      rows: 24,
-      cwd: process.env.HOME || process.cwd(),
-      env: buildSafeEnv(),
-    });
+    let ptyProcess;
+    try {
+      ptyProcess = pty.spawn(shell, [], {
+        name: 'xterm-color',
+        cols: 80,
+        rows: 24,
+        cwd: process.env.HOME || process.cwd(),
+        env: buildSafeEnv(),
+      });
+      logger.info('[terminal-socket] PTY started', { socketId: socket.id, shell, pid: ptyProcess.pid });
+    } catch (err) {
+      logger.error('[terminal-socket] PTY failed to start', { shell, error: err.message });
+      socket.emit('terminal-output', 'terminal unavailable: ' + err.message + '\r\n');
+      socket.disconnect(true);
+      return;
+    }
 
     ptyProcess.on('data', (data) => {
       socket.emit('terminal-output', data);
@@ -103,7 +122,7 @@ function setupTerminalSocket(server) {
     });
 
     socket.on('disconnect', () => {
-      logger.info('Terminal Socket disconnected. Killing process...');
+      logger.info('[terminal-socket] client disconnected; killing PTY', { socketId: socket.id });
       ptyProcess.kill();
     });
   });
