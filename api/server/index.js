@@ -297,7 +297,7 @@ const startServer = async () => {
       : `${clientUrl.pathname}/`;
     if (baseHref !== '/') {
       logger.info(`Setting base href to ${baseHref}`);
-      indexHTML = indexHTML.replace(/base href="\//, `base href="${baseHref}"`);
+      indexHTML = indexHTML.replace(/base href="\/"/, `base href="${baseHref}"`);
     }
   }
 
