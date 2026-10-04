@@ -3,14 +3,10 @@ const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
 const { logger } = require('@librechat/data-schemas');
 
-// node-pty is a native module; fail soft so a missing or failed compile
-// cannot take the whole API server down at require time.
+// node-pty is a native module and is loaded LAZILY on first connection
+// (see the connection handler). A failed native compile must never take the
+// API server down at boot; it only disables the terminal.
 let pty = null;
-try {
-  pty = require('node-pty');
-} catch (err) {
-  logger.warn('[terminal-socket] node-pty unavailable - Mave terminal disabled:', err.message);
-}
 
 // Only a minimal, secret-free environment is passed into the PTY process.
 const SAFE_ENV_KEYS = ['HOME', 'PATH', 'SHELL', 'TERM', 'LANG', 'LC_ALL', 'TMPDIR', 'USER'];
@@ -49,10 +45,6 @@ function extractToken(socket) {
 }
 
 function setupTerminalSocket(server) {
-  if (!pty) {
-    return null;
-  }
-
   const io = new Server(server, {
     path: '/api/terminal-socket/',
     cors: {
@@ -88,6 +80,20 @@ function setupTerminalSocket(server) {
 
   io.on('connection', (socket) => {
     logger.info('[terminal-socket] client connected', { socketId: socket.id });
+
+    // Lazy-load node-pty on the first connection: a failed native compile
+    // must not have taken the server down at boot - it just disables the terminal.
+    if (!pty) {
+      try {
+        pty = require('node-pty');
+        logger.info('[terminal-socket] node-pty loaded on first connection');
+      } catch (err) {
+        logger.warn('[terminal-socket] node-pty unavailable - terminal disabled:', err.message);
+        socket.emit('terminal-output', 'terminal unavailable: native pty failed to load\r\n');
+        socket.disconnect(true);
+        return;
+      }
+    }
 
     const shell = os.platform() === 'win32' ? 'powershell.exe' : 'bash';
     let ptyProcess;

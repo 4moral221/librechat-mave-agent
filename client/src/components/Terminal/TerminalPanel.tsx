@@ -2,8 +2,10 @@ import React, { useEffect, useRef } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { useAuthContext } from '~/hooks/AuthContext';
 
 export default function TerminalPanel({ isVisible }: { isVisible: boolean }) {
+  const { token } = useAuthContext();
   const terminalRef = useRef<HTMLDivElement>(null);
   const term = useRef<Terminal | null>(null);
   const fitAddon = useRef<FitAddon | null>(null);
@@ -24,38 +26,7 @@ export default function TerminalPanel({ isVisible }: { isVisible: boolean }) {
     term.current.loadAddon(fitAddon.current);
     term.current.open(terminalRef.current);
     fitAddon.current.fit();
-
-    // Dynamically import socket.io-client to avoid SSR issues if any
-    import('socket.io-client').then(({ io }) => {
-      const socket = io({ path: '/api/terminal-socket/' });
-
-      term.current?.onData((data) => {
-        socket.emit('terminal-input', data);
-      });
-
-      socket.on('terminal-output', (data) => {
-        term.current?.write(data);
-      });
-
-      const handleResize = () => {
-        if (!fitAddon.current || !term.current) return;
-        fitAddon.current.fit();
-        socket.emit('terminal-resize', {
-          cols: term.current.cols,
-          rows: term.current.rows,
-        });
-      };
-
-      window.addEventListener('resize', handleResize);
-      
-      // Emit initial size
-      handleResize();
-
-      term.current?.onDispose(() => {
-        window.removeEventListener('resize', handleResize);
-        socket.disconnect();
-      });
-    });
+    term.current.focus();
 
     return () => {
       term.current?.dispose();
@@ -63,9 +34,63 @@ export default function TerminalPanel({ isVisible }: { isVisible: boolean }) {
     };
   }, []);
 
+  // Connects with the app's existing auth token (from useAuthContext - never
+  // stored in localStorage, never logged) and reconnects when the token rotates
+  // (silent refresh) or the panel becomes visible, so the server always
+  // verifies the CURRENT token.
+  useEffect(() => {
+    if (!term.current || !token || !isVisible) return;
+
+    let disposed = false;
+    let socket: import('socket.io-client').Socket | undefined;
+    let dataDisposal: { dispose: () => void } | undefined;
+    const handleResize = () => {
+      if (!fitAddon.current || !term.current) return;
+      fitAddon.current.fit();
+      socket?.emit('terminal-resize', {
+        cols: term.current.cols,
+        rows: term.current.rows,
+      });
+    };
+
+    // Dynamically import socket.io-client to avoid SSR issues if any
+    import('socket.io-client').then(({ io }) => {
+      if (disposed || !term.current) return;
+
+      socket = io({
+        path: '/api/terminal-socket/',
+        auth: { token },
+      });
+
+      dataDisposal = term.current.onData((data) => {
+        socket?.emit('terminal-input', data);
+      });
+
+      socket.on('terminal-output', (data) => {
+        term.current?.write(data);
+      });
+
+      socket.on('connect', () => {
+        handleResize();
+      });
+
+      window.addEventListener('resize', handleResize);
+    });
+
+    return () => {
+      disposed = true;
+      window.removeEventListener('resize', handleResize);
+      dataDisposal?.dispose();
+      socket?.disconnect();
+    };
+  }, [token, isVisible]);
+
   useEffect(() => {
     if (isVisible) {
-      setTimeout(() => fitAddon.current?.fit(), 0);
+      setTimeout(() => {
+        fitAddon.current?.fit();
+        term.current?.focus();
+      }, 0);
     }
   }, [isVisible]);
 
