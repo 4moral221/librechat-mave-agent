@@ -87,7 +87,7 @@ let setupTerminalSocket = null;
 try {
   setupTerminalSocket = require('~/server/terminalSocket');
 } catch (err) {
-  logger.warn('[terminal-socket] module unavailable - Mave terminal disabled:', err.message, err.code);
+  logger.warn('[terminal-socket] module unavailable: ' + err.message + ' | code=' + err.code + ' | ' + String(err.stack).split('\n').slice(0,4).join(' ; '));
 }
 const initializeMCPs = require('./services/initializeMCPs');
 const { configureSubagentTaskRouting } = require('./services/Endpoints/agents/subagentThreadStore');
@@ -297,7 +297,7 @@ const startServer = async () => {
       : `${clientUrl.pathname}/`;
     if (baseHref !== '/') {
       logger.info(`Setting base href to ${baseHref}`);
-      indexHTML = indexHTML.replace(/base href="\/"/, `base href="${baseHref}"`);
+      indexHTML = indexHTML.replace(/base href="\//, `base href="${baseHref}"`);
     }
   }
 
