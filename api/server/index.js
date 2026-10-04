@@ -80,6 +80,15 @@ const { jwtLogin, ldapLogin, passportLogin } = require('~/strategies');
 const { startExpiredFileSweep } = require('./services/Files/process');
 const { checkMigrations } = require('./services/start/migration');
 const optionalJwtAuth = require('./middleware/optionalJwtAuth');
+
+// Mave terminal socket - fail-soft: if this module or its deps are
+// missing/broken, the terminal is disabled instead of the API crashing.
+let setupTerminalSocket = null;
+try {
+  setupTerminalSocket = require('./server/terminalSocket');
+} catch (err) {
+  logger.warn('[terminal-socket] module unavailable - Mave terminal disabled:', err.message);
+}
 const initializeMCPs = require('./services/initializeMCPs');
 const { configureSubagentTaskRouting } = require('./services/Endpoints/agents/subagentThreadStore');
 const configureSocialLogins = require('./socialLogins');
@@ -530,6 +539,14 @@ const startServer = async () => {
       process.exit(1);
     }
   });
+
+  // Attach the Mave terminal socket to the SAME http server (WebSocket upgrade on
+  // /api/terminal-socket/). One require at the top, one call here - after app.listen.
+  if (setupTerminalSocket) {
+    setupTerminalSocket(server);
+  } else {
+    logger.warn('[terminal-socket] not attached - terminal disabled');
+  }
 
   configureServerTimeouts(server);
   logger.info('HTTP server timeout configuration', {
