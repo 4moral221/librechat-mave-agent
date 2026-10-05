@@ -237,10 +237,13 @@ function ChatView({ index = 0, project }: { index?: number; project?: TChatProje
                           }}
                           className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-white rounded shadow text-sm transition-colors"
                         >
-                          {isTerminalVisible ? 'Hide Agent Terminal' : 'Show Agent Terminal'}
+                          Mave Terminal
                         </button>
                       </div>
-                      <TerminalPanel isVisible={isTerminalVisible} />
+                      <TerminalPanel
+                        isVisible={isTerminalVisible}
+                        onClose={() => setIsTerminalVisible(false)}
+                      />
                     </>
                   </TraceSurface>
                 </Presentation>
