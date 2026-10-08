@@ -1,7 +1,9 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+
+const SESSION_STORAGE_KEY = 'mave-terminal-sessionId';
 
 export default function TerminalPanel({
   isVisible,
@@ -14,6 +16,38 @@ export default function TerminalPanel({
   const term = useRef<Terminal | null>(null);
   const fitAddon = useRef<FitAddon | null>(null);
   const socketRef = useRef<ReturnType<typeof import('socket.io-client')['io']> | null>(null);
+
+  // Sticky modifier state
+  const [ctrlActive, setCtrlActive] = useState(false);
+  const [altActive, setAltActive] = useState(false);
+
+  // Sends data through the socket
+  const sendInput = useCallback((data: string) => {
+    socketRef.current?.emit('terminal-input', data);
+  }, []);
+
+  // Handle a key press, applying sticky Ctrl/Alt modifiers
+  const handleKey = useCallback(
+    (data: string) => {
+      if (ctrlActive) {
+        // Ctrl + letter: char code & 0x1f
+        const ch = data.toLowerCase();
+        if (ch >= 'a' && ch <= 'z') {
+          sendInput(String.fromCharCode(ch.charCodeAt(0) & 0x1f));
+        } else {
+          sendInput(data);
+        }
+        setCtrlActive(false);
+      } else if (altActive) {
+        // Alt sends ESC prefix
+        sendInput('\x1b' + data);
+        setAltActive(false);
+      } else {
+        sendInput(data);
+      }
+    },
+    [ctrlActive, altActive, sendInput],
+  );
 
   // Boot xterm once on first mount
   useEffect(() => {
@@ -33,12 +67,14 @@ export default function TerminalPanel({
     term.current = t;
     fitAddon.current = fit;
 
-    // Connect via socket.io — plain HTTP polling + upgrade so Render's proxy
-    // doesn't need sticky sessions or WS passthrough configured.
+    // Connect via socket.io
     import('socket.io-client').then(({ io }) => {
+      const savedSession = localStorage.getItem(SESSION_STORAGE_KEY) || '';
+
       const socket = io(window.location.origin, {
         path: '/api/terminal-socket/',
         transports: ['websocket', 'polling'],
+        query: savedSession ? { sessionId: savedSession } : {},
       });
 
       socketRef.current = socket;
@@ -47,6 +83,14 @@ export default function TerminalPanel({
         t.write('\r\n\x1b[32m✓ Connected to Mave Agent Terminal\x1b[0m\r\n');
         fit.fit();
         socket.emit('terminal-resize', { cols: t.cols, rows: t.rows });
+      });
+
+      // Server assigns/confirms sessionId — persist it
+      socket.on('session-id', (id: string) => {
+        localStorage.setItem(SESSION_STORAGE_KEY, id);
+      });
+      socket.on('connected', (payload: { sessionId: string }) => {
+        localStorage.setItem(SESSION_STORAGE_KEY, payload.sessionId);
       });
 
       socket.on('connect_error', (err: Error) => {
@@ -99,6 +143,42 @@ export default function TerminalPanel({
   }, [isVisible]);
 
   if (!isVisible) return null;
+
+  // ─── Extra-keys bar definition ───
+  const extraKeys: Array<{ label: string; action: () => void; sticky?: boolean; active?: boolean }> =
+    [
+      { label: 'Esc', action: () => handleKey('\x1b') },
+      { label: 'Tab', action: () => handleKey('\t') },
+      { label: '↑', action: () => sendInput('\x1b[A') },
+      { label: '↓', action: () => sendInput('\x1b[B') },
+      { label: '←', action: () => sendInput('\x1b[D') },
+      { label: '→', action: () => sendInput('\x1b[C') },
+      { label: '|', action: () => handleKey('|') },
+      { label: '~', action: () => handleKey('~') },
+      { label: '/', action: () => handleKey('/') },
+      { label: '-', action: () => handleKey('-') },
+      { label: 'C-c', action: () => sendInput('\x03') },
+      { label: 'C-d', action: () => sendInput('\x04') },
+      { label: 'C-l', action: () => sendInput('\x0c') },
+      {
+        label: 'Ctrl',
+        action: () => {
+          setCtrlActive((v) => !v);
+          setAltActive(false);
+        },
+        sticky: true,
+        active: ctrlActive,
+      },
+      {
+        label: 'Alt',
+        action: () => {
+          setAltActive((v) => !v);
+          setCtrlActive(false);
+        },
+        sticky: true,
+        active: altActive,
+      },
+    ];
 
   return (
     /* Fullscreen overlay */
@@ -186,6 +266,48 @@ export default function TerminalPanel({
 
       {/* xterm.js container — takes all remaining space */}
       <div ref={terminalRef} style={{ flex: 1, overflow: 'hidden', padding: '4px 8px' }} />
+
+      {/* ─── Extra-keys bar ─── */}
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 4,
+          padding: '6px 8px',
+          background: '#2d2d2d',
+          borderTop: '1px solid #444',
+          flexShrink: 0,
+        }}
+      >
+        {extraKeys.map((k) => (
+          <button
+            key={k.label}
+            // onPointerDown + preventDefault keeps the soft-keyboard open on mobile
+            onPointerDown={(e) => {
+              e.preventDefault();
+              k.action();
+              // Re-focus xterm so regular typing continues
+              term.current?.focus();
+            }}
+            style={{
+              background: k.active ? '#4a9eff' : '#3a3a3a',
+              color: k.active ? '#fff' : '#ddd',
+              border: k.active ? '1px solid #6ab0ff' : '1px solid #555',
+              borderRadius: 4,
+              padding: '4px 10px',
+              fontSize: 13,
+              fontFamily: 'monospace',
+              cursor: 'pointer',
+              minWidth: 34,
+              textAlign: 'center',
+              userSelect: 'none',
+              WebkitTapHighlightColor: 'transparent',
+            }}
+          >
+            {k.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
