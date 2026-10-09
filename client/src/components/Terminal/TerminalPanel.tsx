@@ -20,44 +20,63 @@ export default function TerminalPanel({
   // Sticky modifier state
   const [ctrlActive, setCtrlActive] = useState(false);
   const [altActive, setAltActive] = useState(false);
+  const [shiftActive, setShiftActive] = useState(false);
 
   // Sends data through the socket
   const sendInput = useCallback((data: string) => {
     socketRef.current?.emit('terminal-input', data);
   }, []);
 
-  // Handle a key press, applying sticky Ctrl/Alt modifiers
+  // Handle a key press, applying sticky Ctrl/Alt/Shift modifiers
   const handleKey = useCallback(
-    (data: string) => {
-      if (ctrlActive) {
-        // Ctrl + letter: char code & 0x1f
-        const ch = data.toLowerCase();
-        if (ch >= 'a' && ch <= 'z') {
-          sendInput(String.fromCharCode(ch.charCodeAt(0) & 0x1f));
-        } else {
-          sendInput(data);
+    (data: string, bypassModifiers: boolean = false) => {
+      let output = data;
+
+      if (!bypassModifiers) {
+        if (shiftActive && data.length === 1 && data >= 'a' && data <= 'z') {
+          output = data.toUpperCase();
         }
-        setCtrlActive(false);
-      } else if (altActive) {
-        // Alt sends ESC prefix
-        sendInput('\x1b' + data);
-        setAltActive(false);
-      } else {
-        sendInput(data);
+        
+        if (ctrlActive) {
+          // Ctrl + letter: char code & 0x1f
+          const ch = output.toLowerCase();
+          if (ch >= 'a' && ch <= 'z') {
+            output = String.fromCharCode(ch.charCodeAt(0) & 0x1f);
+          }
+          setCtrlActive(false);
+        } else if (altActive) {
+          // Alt sends ESC prefix
+          output = '\x1b' + output;
+          setAltActive(false);
+        }
+      }
+
+      sendInput(output);
+      if (!bypassModifiers) {
+        setShiftActive(false); // Reset shift after 1 character usually, or keep it sticky? Let's reset.
       }
     },
-    [ctrlActive, altActive, sendInput],
+    [ctrlActive, altActive, shiftActive, sendInput],
   );
 
-  // Boot xterm once on first mount
-  useEffect(() => {
-    if (!terminalRef.current || term.current) return;
+  const initTerminal = useCallback(() => {
+    if (term.current) {
+      term.current.dispose();
+      term.current = null;
+    }
+    if (socketRef.current) {
+      socketRef.current.disconnect();
+      socketRef.current = null;
+    }
+
+    if (!terminalRef.current) return;
 
     const t = new Terminal({
       cursorBlink: true,
       theme: { background: '#1e1e1e', foreground: '#f3f3f3' },
       fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-      fontSize: 14,
+      fontSize: 13,
+      scrollback: 5000, // Make sure scrolling works well
     });
     const fit = new FitAddon();
     t.loadAddon(fit);
@@ -101,18 +120,27 @@ export default function TerminalPanel({
         t.write(data);
       });
 
+      socket.on('session-killed', () => {
+        t.write('\r\n\x1b[33mSession ended by user.\x1b[0m\r\n');
+        localStorage.removeItem(SESSION_STORAGE_KEY);
+      });
+
       t.onData((data) => {
         socket.emit('terminal-input', data);
       });
     });
+  }, []);
 
+  // Boot xterm once on first mount
+  useEffect(() => {
+    initTerminal();
     return () => {
-      t.dispose();
+      term.current?.dispose();
       term.current = null;
       socketRef.current?.disconnect();
       socketRef.current = null;
     };
-  }, []);
+  }, [initTerminal]);
 
   // Refit whenever visibility changes or viewport changes (keyboard on mobile, resize)
   useEffect(() => {
@@ -144,41 +172,45 @@ export default function TerminalPanel({
 
   if (!isVisible) return null;
 
-  // ─── Extra-keys bar definition ───
-  const extraKeys: Array<{ label: string; action: () => void; sticky?: boolean; active?: boolean }> =
-    [
-      { label: 'Esc', action: () => handleKey('\x1b') },
-      { label: 'Tab', action: () => handleKey('\t') },
-      { label: '↑', action: () => sendInput('\x1b[A') },
-      { label: '↓', action: () => sendInput('\x1b[B') },
-      { label: '←', action: () => sendInput('\x1b[D') },
-      { label: '→', action: () => sendInput('\x1b[C') },
-      { label: '|', action: () => handleKey('|') },
-      { label: '~', action: () => handleKey('~') },
-      { label: '/', action: () => handleKey('/') },
-      { label: '-', action: () => handleKey('-') },
-      { label: 'C-c', action: () => sendInput('\x03') },
-      { label: 'C-d', action: () => sendInput('\x04') },
-      { label: 'C-l', action: () => sendInput('\x0c') },
-      {
-        label: 'Ctrl',
-        action: () => {
-          setCtrlActive((v) => !v);
-          setAltActive(false);
-        },
-        sticky: true,
-        active: ctrlActive,
-      },
-      {
-        label: 'Alt',
-        action: () => {
-          setAltActive((v) => !v);
-          setCtrlActive(false);
-        },
-        sticky: true,
-        active: altActive,
-      },
-    ];
+  // Session Handlers
+  const handleNewSession = () => {
+    localStorage.removeItem(SESSION_STORAGE_KEY);
+    initTerminal();
+  };
+
+  const handleEndSession = () => {
+    socketRef.current?.emit('kill-session');
+    localStorage.removeItem(SESSION_STORAGE_KEY);
+  };
+
+  // Keyboard layout builder
+  const renderKey = (label: string, action: () => void, isActive?: boolean, flex?: number) => (
+    <button
+      key={label}
+      onPointerDown={(e) => {
+        e.preventDefault();
+        action();
+        term.current?.focus();
+      }}
+      style={{
+        background: isActive ? '#4a9eff' : '#3a3a3a',
+        color: isActive ? '#fff' : '#ddd',
+        border: isActive ? '1px solid #6ab0ff' : '1px solid #555',
+        borderRadius: 4,
+        padding: '6px 4px',
+        fontSize: 13,
+        fontFamily: 'monospace',
+        cursor: 'pointer',
+        flex: flex || 1,
+        minWidth: flex ? 'auto' : 30,
+        textAlign: 'center',
+        userSelect: 'none',
+        WebkitTapHighlightColor: 'transparent',
+      }}
+    >
+      {label}
+    </button>
+  );
 
   return (
     /* Fullscreen overlay */
@@ -206,23 +238,24 @@ export default function TerminalPanel({
           flexShrink: 0,
         }}
       >
-        {/* Traffic-light dots */}
-        <div style={{ display: 'flex', gap: 6 }}>
+        {/* Actions (Left side) */}
+        <div style={{ display: 'flex', gap: 8 }}>
           <button
-            aria-label="Close terminal"
-            onClick={onClose}
+            onClick={handleNewSession}
             style={{
-              width: 12,
-              height: 12,
-              borderRadius: '50%',
-              background: '#ff5f56',
-              border: 'none',
-              cursor: 'pointer',
-              padding: 0,
+              background: '#4CAF50', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 8px', cursor: 'pointer', fontSize: 12
             }}
-          />
-          <div style={{ width: 12, height: 12, borderRadius: '50%', background: '#ffbd2e' }} />
-          <div style={{ width: 12, height: 12, borderRadius: '50%', background: '#27c93f' }} />
+          >
+            + New Session
+          </button>
+          <button
+            onClick={handleEndSession}
+            style={{
+              background: '#f44336', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 8px', cursor: 'pointer', fontSize: 12
+            }}
+          >
+            End Session
+          </button>
         </div>
 
         {/* Centred avatar + title */}
@@ -242,7 +275,7 @@ export default function TerminalPanel({
             style={{ width: 22, height: 22, borderRadius: '50%', border: '1px solid #555' }}
           />
           <span style={{ fontSize: 12, fontWeight: 600, color: '#ccc', letterSpacing: 1 }}>
-            Mave Agent Terminal
+            Mave Terminal
           </span>
         </div>
 
@@ -255,7 +288,7 @@ export default function TerminalPanel({
             border: '1px solid #555',
             color: '#aaa',
             borderRadius: 4,
-            padding: '2px 10px',
+            padding: '4px 10px',
             cursor: 'pointer',
             fontSize: 12,
           }}
@@ -267,46 +300,65 @@ export default function TerminalPanel({
       {/* xterm.js container — takes all remaining space */}
       <div ref={terminalRef} style={{ flex: 1, overflow: 'hidden', padding: '4px 8px' }} />
 
-      {/* ─── Extra-keys bar ─── */}
+      {/* ─── Full Virtual Keyboard ─── */}
       <div
         style={{
           display: 'flex',
-          flexWrap: 'wrap',
+          flexDirection: 'column',
           gap: 4,
-          padding: '6px 8px',
+          padding: '6px 4px',
           background: '#2d2d2d',
           borderTop: '1px solid #444',
           flexShrink: 0,
         }}
       >
-        {extraKeys.map((k) => (
-          <button
-            key={k.label}
-            // onPointerDown + preventDefault keeps the soft-keyboard open on mobile
-            onPointerDown={(e) => {
-              e.preventDefault();
-              k.action();
-              // Re-focus xterm so regular typing continues
-              term.current?.focus();
-            }}
-            style={{
-              background: k.active ? '#4a9eff' : '#3a3a3a',
-              color: k.active ? '#fff' : '#ddd',
-              border: k.active ? '1px solid #6ab0ff' : '1px solid #555',
-              borderRadius: 4,
-              padding: '4px 10px',
-              fontSize: 13,
-              fontFamily: 'monospace',
-              cursor: 'pointer',
-              minWidth: 34,
-              textAlign: 'center',
-              userSelect: 'none',
-              WebkitTapHighlightColor: 'transparent',
-            }}
-          >
-            {k.label}
-          </button>
-        ))}
+        {/* Row 0: Utilities / Scroll / Esc */}
+        <div style={{ display: 'flex', gap: 4 }}>
+          {renderKey('Esc', () => handleKey('\x1b', true))}
+          {renderKey('C-c', () => sendInput('\x03'))}
+          {renderKey('C-d', () => sendInput('\x04'))}
+          {renderKey('C-l', () => sendInput('\x0c'))}
+          {renderKey('PgUp', () => term.current?.scrollPages(-1))}
+          {renderKey('PgDn', () => term.current?.scrollPages(1))}
+          {renderKey('ScrlUp', () => term.current?.scrollLines(-1))}
+          {renderKey('ScrlDn', () => term.current?.scrollLines(1))}
+        </div>
+
+        {/* Row 1: Numbers */}
+        <div style={{ display: 'flex', gap: 4 }}>
+          {['1','2','3','4','5','6','7','8','9','0','-','='].map(k => renderKey(k, () => handleKey(k)))}
+          {renderKey('Bksp', () => sendInput('\x7f'), false, 1.5)}
+        </div>
+
+        {/* Row 2: QWERTY Top */}
+        <div style={{ display: 'flex', gap: 4 }}>
+          {renderKey('Tab', () => handleKey('\t'), false, 1.2)}
+          {['q','w','e','r','t','y','u','i','o','p','[',']','\\'].map(k => renderKey(k, () => handleKey(k)))}
+        </div>
+
+        {/* Row 3: QWERTY Middle */}
+        <div style={{ display: 'flex', gap: 4 }}>
+          <div style={{ flex: 0.3 }}></div>
+          {['a','s','d','f','g','h','j','k','l',';','\''].map(k => renderKey(k, () => handleKey(k)))}
+          {renderKey('Enter', () => sendInput('\r'), false, 1.5)}
+        </div>
+
+        {/* Row 4: QWERTY Bottom + Arrows */}
+        <div style={{ display: 'flex', gap: 4 }}>
+          {renderKey('Shift', () => setShiftActive(!shiftActive), shiftActive, 1.5)}
+          {['z','x','c','v','b','n','m',',','.','/'].map(k => renderKey(k, () => handleKey(k)))}
+          {renderKey('↑', () => sendInput('\x1b[A'))}
+        </div>
+
+        {/* Row 5: Modifiers & Space */}
+        <div style={{ display: 'flex', gap: 4 }}>
+          {renderKey('Ctrl', () => { setCtrlActive(!ctrlActive); setAltActive(false); }, ctrlActive, 1.2)}
+          {renderKey('Alt', () => { setAltActive(!altActive); setCtrlActive(false); }, altActive, 1.2)}
+          {renderKey('Space', () => handleKey(' '), false, 5)}
+          {renderKey('←', () => sendInput('\x1b[D'))}
+          {renderKey('↓', () => sendInput('\x1b[B'))}
+          {renderKey('→', () => sendInput('\x1b[C'))}
+        </div>
       </div>
     </div>
   );
